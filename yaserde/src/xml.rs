@@ -142,6 +142,77 @@ impl From<::xml::namespace::Namespace> for XmlNamespace {
   }
 }
 
+/// Mutable, owned start-element event passed to serializer start-element updaters.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct XmlStartElement {
+  pub name: XmlName,
+  pub attributes: Vec<XmlAttribute>,
+  pub namespace: XmlNamespace,
+}
+
+impl XmlStartElement {
+  pub fn new(name: XmlName, attributes: Vec<XmlAttribute>, namespace: XmlNamespace) -> Self {
+    Self {
+      name,
+      attributes,
+      namespace,
+    }
+  }
+
+  /// Updates an existing namespace declaration, returning whether it was present.
+  ///
+  /// Expanded names using that prefix are updated too. The default namespace never
+  /// applies to unprefixed attributes.
+  pub fn update_namespace(&mut self, prefix: &str, uri: impl Into<String>) -> bool {
+    if !self.namespace.0.contains_key(prefix) {
+      return false;
+    }
+    self.set_namespace(prefix, uri);
+    true
+  }
+
+  /// Inserts or replaces a namespace declaration and returns the previous URI.
+  ///
+  /// Expanded names using that prefix are updated too. The default namespace never
+  /// applies to unprefixed attributes.
+  pub fn set_namespace(
+    &mut self,
+    prefix: impl Into<String>,
+    uri: impl Into<String>,
+  ) -> Option<String> {
+    let prefix = prefix.into();
+    let uri = uri.into();
+    if self.name.prefix.as_deref() == Some(prefix.as_str())
+      || (prefix.is_empty() && self.name.prefix.is_none())
+    {
+      self.name.namespace = Some(uri.clone());
+    }
+    for attribute in &mut self.attributes {
+      if attribute.name.prefix.as_deref() == Some(prefix.as_str()) {
+        attribute.name.namespace = Some(uri.clone());
+      }
+    }
+    self.namespace.0.insert(prefix, uri)
+  }
+
+  /// Inserts or replaces an unprefixed attribute by local name.
+  pub fn set_attribute(&mut self, local_name: impl Into<String>, value: impl Into<String>) {
+    let local_name = local_name.into();
+    let value = value.into();
+    if let Some(attribute) = self.attributes.iter_mut().find(|attribute| {
+      attribute.name.local_name == local_name
+        && attribute.name.prefix.is_none()
+        && attribute.name.namespace.is_none()
+    }) {
+      attribute.value = value;
+    } else {
+      self
+        .attributes
+        .push(XmlAttribute::new(XmlName::local(local_name), value));
+    }
+  }
+}
+
 /// Parser-neutral XML events produced by YaSerDe reader backends.
 #[derive(Clone, Debug, PartialEq)]
 pub enum XmlReadEvent {

@@ -77,4 +77,4 @@ For runtime selection, pass a `Box<dyn yaserde::xml::XmlEventReader>` to `yaserd
 
 Migration note: custom deserializers should use `yaserde::xml::XmlReadEvent` instead of matching `xml::reader::XmlEvent` directly.
 
-See [Implementing a Custom XML Backend](docs/custom-backend.md) for details on plugging in your own parser.
+See [Implementing a Custom XML Backend](docs/custom-backend.md) for details on plugging in your own parser. See [Start-element updater](docs/start-element-updater.md) to adjust namespace declarations or ordinary attributes during serialization.

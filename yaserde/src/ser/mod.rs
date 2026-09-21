@@ -1,7 +1,7 @@
 //! Generic data structure serialization framework.
 //!
 
-use crate::xml::{XmlAttribute, XmlNamespace, XmlWriteEvent};
+use crate::xml::{XmlAttribute, XmlName, XmlNamespace, XmlStartElement, XmlWriteEvent};
 use crate::YaSerialize;
 use ::xml::writer::XmlEvent;
 use ::xml::{EmitterConfig, EventWriter};
@@ -59,6 +59,7 @@ pub struct Serializer<W: Write> {
   writer: EventWriter<W>,
   skip_start_end: bool,
   start_event_name: Option<String>,
+  start_element_updater: Option<Box<dyn FnMut(&mut XmlStartElement) + Send + Sync + 'static>>,
 }
 
 impl<W: Write> Serializer<W> {
@@ -67,6 +68,7 @@ impl<W: Write> Serializer<W> {
       writer,
       skip_start_end: false,
       start_event_name: None,
+      start_element_updater: None,
     }
   }
 
@@ -109,11 +111,46 @@ impl<W: Write> Serializer<W> {
     self.start_event_name = name;
   }
 
+  /// Sets a per-serializer callback invoked once for every start element.
+  ///
+  /// The callback must be `Send + Sync + 'static`; use `move` to capture owned configuration.
+  pub fn set_start_element_updater<F>(&mut self, updater: F)
+  where
+    F: FnMut(&mut XmlStartElement) + Send + Sync + 'static,
+  {
+    self.start_element_updater = Some(Box::new(updater));
+  }
+
+  pub fn clear_start_element_updater(&mut self) {
+    self.start_element_updater = None;
+  }
+
   pub fn write<'a, E>(&mut self, event: E) -> ::xml::writer::Result<()>
   where
     E: Into<XmlEvent<'a>>,
   {
-    self.writer.write(event)
+    let event = event.into();
+    if self.start_element_updater.is_none() {
+      return self.writer.write(event);
+    }
+    match event {
+      XmlEvent::StartElement {
+        name,
+        attributes,
+        namespace,
+      } => self.write_updated_start_element(XmlStartElement::new(
+        name.to_owned().into(),
+        attributes
+          .into_owned()
+          .into_iter()
+          .map(|attribute| {
+            XmlAttribute::new(attribute.name.to_owned().into(), attribute.value.to_owned())
+          })
+          .collect(),
+        namespace.into_owned().into(),
+      )),
+      event => self.writer.write(event),
+    }
   }
 
   pub fn write_event(&mut self, event: XmlWriteEvent<'_>) -> Result<(), String> {
@@ -135,7 +172,72 @@ impl<W: Write> Serializer<W> {
     attributes: Vec<XmlAttribute>,
     namespace: XmlNamespace,
   ) -> Result<(), String> {
-    let name = ::xml::name::OwnedName::local(name.into());
+    let name = name.into();
+    if self.start_element_updater.is_none() {
+      return self
+        .write_start_element_unmodified(name, attributes, namespace)
+        .map_err(|e| e.to_string());
+    }
+    self
+      .write_updated_start_element(Self::start_element_from_name(name, attributes, namespace))
+      .map_err(|e| e.to_string())
+  }
+
+  fn start_element_from_name(
+    name: String,
+    attributes: Vec<XmlAttribute>,
+    namespace: XmlNamespace,
+  ) -> XmlStartElement {
+    let name = match name.split_once(':') {
+      Some((prefix, local_name)) => XmlName {
+        local_name: local_name.to_owned(),
+        namespace: namespace.0.get(prefix).cloned(),
+        prefix: Some(prefix.to_owned()),
+      },
+      None => XmlName {
+        local_name: name,
+        namespace: namespace.0.get("").cloned(),
+        prefix: None,
+      },
+    };
+    XmlStartElement::new(name, attributes, namespace)
+  }
+
+  fn write_updated_start_element(
+    &mut self,
+    mut event: XmlStartElement,
+  ) -> ::xml::writer::Result<()> {
+    if let Some(updater) = self.start_element_updater.as_mut() {
+      updater(&mut event);
+    }
+    self.write_start_element_owned(event.name, event.attributes, event.namespace)
+  }
+
+  fn write_start_element_unmodified(
+    &mut self,
+    name: String,
+    attributes: Vec<XmlAttribute>,
+    namespace: XmlNamespace,
+  ) -> ::xml::writer::Result<()> {
+    let name = ::xml::name::OwnedName::local(name);
+    self.write_start_element_xml_rs(name, attributes, namespace)
+  }
+
+  fn write_start_element_owned(
+    &mut self,
+    name: XmlName,
+    attributes: Vec<XmlAttribute>,
+    namespace: XmlNamespace,
+  ) -> ::xml::writer::Result<()> {
+    self.write_start_element_xml_rs(name.to_xml_rs(), attributes, namespace)
+  }
+
+  fn write_start_element_xml_rs(
+    &mut self,
+    name: ::xml::name::OwnedName,
+    attributes: Vec<XmlAttribute>,
+    namespace: XmlNamespace,
+  ) -> ::xml::writer::Result<()> {
     let attributes: Vec<_> = attributes
       .iter()
       .map(|attribute| attribute.to_xml_rs())
@@ -151,7 +253,6 @@ impl<W: Write> Serializer<W> {
         attributes: ::std::borrow::Cow::Owned(attributes),
         namespace: ::std::borrow::Cow::Owned(namespace.to_xml_rs()),
       })
-      .map_err(|e| e.to_string())
   }
 
   pub fn write_end_element(&mut self) -> Result<(), String> {
