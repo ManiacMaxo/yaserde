@@ -8,10 +8,10 @@ No callback keeps the existing direct writer path.
 ```rust
 use yaserde::ser::Serializer;
 
-let version_uri = String::from("urn:example:v2");
+let version_uri = String::from("urn:example:foo:v2");
 let mut serializer = Serializer::new_for_inner(Vec::new());
 serializer.set_start_element_updater(move |start| {
-  start.update_namespace("soap", version_uri.as_str());
+  start.update_namespace("foo", version_uri.as_str());
   start.set_attribute("version", "2");
 });
 ```
@@ -34,15 +34,14 @@ cargo run -p yaserde --example start_element_updater_bench --release \
   --no-default-features --features xml-rs-backend
 ```
 
-It serializes a derived SOAP/CWMP `Envelope` shaped like Codex's
-`GetParameterValuesResponse`: root SOAP/CWMP/SOAP encoding/XMLSchema bindings,
-an unprefixed `ParameterList` and `ParameterValueStruct`, and `Value` elements
-with optional `xsi:type` attributes and text. The benchmark verifies byte-identical
-no-op output, CWMP 1-0 to 1-3 namespace mapping, root bindings, and unchanged
-values before running three warmup rounds and seven rotating-order samples. It reports median
-nanoseconds per operation and each case's ratio to the no-hook baseline.
+It serializes a generic nested `Foo`/`Bar`/`Baz` document with repeated,
+unprefixed `Item` children, `bar`-namespaced attributes, and text values. The
+benchmark verifies byte-identical no-op output, a `foo` v1-to-v2 namespace
+mapping, retained `bar` bindings, attributes, and text before running three
+warmup rounds and seven rotating-order samples. It reports median nanoseconds
+per operation and each case's ratio to the no-hook baseline.
 
-Optional positional arguments set parameter-list size and iterations per sample:
+Optional positional arguments set item count and iterations per sample:
 
 ```sh
 cargo run -p yaserde --example start_element_updater_bench --release \

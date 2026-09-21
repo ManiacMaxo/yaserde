@@ -12,70 +12,58 @@ use yaserde::YaSerialize;
 #[cfg(not(feature = "derive"))]
 use yaserde_derive::YaSerialize;
 
-const CWMP_10: &str = "urn:dslforum-org:cwmp-1-0";
-const CWMP_13: &str = "urn:dslforum-org:cwmp-1-3";
+const FOO_V1: &str = "urn:example:foo:v1";
+const FOO_V2: &str = "urn:example:foo:v2";
 
 #[derive(YaSerialize)]
-#[yaserde(rename = "Envelope", prefix = "soap-env", namespaces = { "soap-env" = "http://schemas.xmlsoap.org/soap/envelope/", "cwmp" = "urn:dslforum-org:cwmp-1-0" })]
-struct Envelope {
-  #[yaserde(rename = "Header", prefix = "soap-env")]
-  header: Header,
-  #[yaserde(rename = "Body", prefix = "soap-env")]
-  body: Body,
+#[yaserde(rename = "Foo", prefix = "foo", namespaces = { "foo" = "urn:example:foo:v1" })]
+struct Foo {
+  #[yaserde(rename = "Bar", prefix = "foo")]
+  bar: Bar,
 }
 
 #[derive(YaSerialize)]
-#[yaserde(rename = "Header", prefix = "soap-env", namespaces = { "soap-env" = "http://schemas.xmlsoap.org/soap/envelope/", "cwmp" = "urn:dslforum-org:cwmp-1-0" })]
-struct Header {
+#[yaserde(rename = "Bar", prefix = "foo", namespaces = { "foo" = "urn:example:foo:v1" })]
+struct Bar {
   #[yaserde(attribute = true)]
   source: String,
-  #[yaserde(rename = "ID", prefix = "cwmp")]
-  id: String,
+  #[yaserde(rename = "Baz", prefix = "foo")]
+  baz: Baz,
 }
 
 #[derive(YaSerialize)]
-#[yaserde(rename = "Body", prefix = "soap-env", namespaces = { "soap-env" = "http://schemas.xmlsoap.org/soap/envelope/", "cwmp" = "urn:dslforum-org:cwmp-1-0" })]
-struct Body {
-  #[yaserde(rename = "GetParameterValuesResponse", prefix = "cwmp")]
-  response: GetParameterValuesResponse,
+#[yaserde(rename = "Baz", prefix = "foo", namespaces = { "foo" = "urn:example:foo:v1" })]
+struct Baz {
+  #[yaserde(rename = "Items", prefix = "foo")]
+  items: Items,
 }
 
 #[derive(YaSerialize)]
-#[yaserde(rename = "GetParameterValuesResponse", prefix = "cwmp", namespaces = { "soap-env" = "http://schemas.xmlsoap.org/soap/envelope/", "cwmp" = "urn:dslforum-org:cwmp-1-0" })]
-struct GetParameterValuesResponse {
-  #[yaserde(rename = "ParameterList", prefix = "cwmp")]
-  parameter_list: ParameterList,
+#[yaserde(rename = "Items", prefix = "foo", namespaces = { "foo" = "urn:example:foo:v1" })]
+struct Items {
+  #[yaserde(rename = "Item", prefix = "foo")]
+  entries: Vec<Item>,
 }
 
 #[derive(YaSerialize)]
-#[yaserde(rename = "ParameterList", prefix = "cwmp", namespaces = { "soap-env" = "http://schemas.xmlsoap.org/soap/envelope/", "cwmp" = "urn:dslforum-org:cwmp-1-0" })]
-struct ParameterList {
-  #[yaserde(rename = "ParameterValueStruct", prefix = "cwmp")]
-  parameters: Vec<ParameterValueStruct>,
-}
-
-#[derive(YaSerialize)]
-#[yaserde(rename = "ParameterValueStruct", prefix = "cwmp", namespaces = { "soap-env" = "http://schemas.xmlsoap.org/soap/envelope/", "cwmp" = "urn:dslforum-org:cwmp-1-0" })]
-struct ParameterValueStruct {
-  #[yaserde(rename = "Name", prefix = "cwmp")]
-  name: String,
-  #[yaserde(rename = "Value", prefix = "cwmp")]
+#[yaserde(rename = "Item", prefix = "foo", namespaces = { "foo" = "urn:example:foo:v1" })]
+struct Item {
+  #[yaserde(rename = "Label", prefix = "foo")]
+  label: String,
+  #[yaserde(rename = "Value", prefix = "foo")]
   value: String,
 }
 
-fn model() -> Envelope {
-  Envelope {
-    header: Header {
-      source: CWMP_10.to_owned(),
-      id: format!("kept-{CWMP_10}"),
-    },
-    body: Body {
-      response: GetParameterValuesResponse {
-        parameter_list: ParameterList {
-          parameters: (0..2)
-            .map(|index| ParameterValueStruct {
-              name: format!("Device.WiFi.SSID.{index}.SSID"),
-              value: format!("kept-{CWMP_10}-{index}"),
+fn model() -> Foo {
+  Foo {
+    bar: Bar {
+      source: FOO_V1.to_owned(),
+      baz: Baz {
+        items: Items {
+          entries: (0..2)
+            .map(|index| Item {
+              label: format!("item-{index}"),
+              value: format!("kept-{FOO_V1}-{index}"),
             })
             .collect(),
         },
@@ -84,7 +72,7 @@ fn model() -> Envelope {
   }
 }
 
-fn serialize_with_updater<F>(model: &Envelope, updater: F) -> String
+fn serialize_with_updater<F>(model: &Foo, updater: F) -> String
 where
   F: FnMut(&mut XmlStartElement) + Send + Sync + 'static,
 {
@@ -94,18 +82,18 @@ where
   String::from_utf8(serializer.into_inner().into_inner()).unwrap()
 }
 
-fn serialize_without_updater(model: &Envelope) -> String {
+fn serialize_without_updater(model: &Foo) -> String {
   let mut serializer = Serializer::new_for_inner(Cursor::new(Vec::new()));
   model.serialize(&mut serializer).unwrap();
   String::from_utf8(serializer.into_inner().into_inner()).unwrap()
 }
 
 #[test]
-fn no_hook_preserves_derived_soap_output() {
+fn no_hook_preserves_derived_foo_output() {
   let xml = serialize_without_updater(&model());
-  assert!(xml.starts_with("<soap-env:Envelope xmlns:cwmp=\"urn:dslforum-org:cwmp-1-0\" xmlns:soap-env=\"http://schemas.xmlsoap.org/soap/envelope/\">"));
-  assert!(xml.contains("<soap-env:Body>"), "{}", xml);
-  assert!(!xml.contains("<soap-env:Body xmlns:"), "{}", xml);
+  assert!(xml.starts_with("<foo:Foo xmlns:foo=\"urn:example:foo:v1\">"));
+  assert!(xml.contains("<foo:Baz>"), "{}", xml);
+  assert!(!xml.contains("<foo:Baz xmlns:"), "{}", xml);
 }
 
 #[test]
@@ -115,8 +103,8 @@ fn noop_updater_is_byte_equivalent_with_inherited_and_default_namespaces() {
   assert_eq!(serialize_with_updater(&derived, |_| {}), expected);
 
   let mut namespace = XmlNamespace::empty();
-  namespace.force_put("", "urn:default");
-  namespace.force_put("p", CWMP_10);
+  namespace.force_put("", "urn:example:default");
+  namespace.force_put("p", FOO_V1);
   let mut unmodified = Serializer::new_for_inner(Cursor::new(Vec::new()));
   unmodified
     .write_start_element("root", Vec::new(), namespace.clone())
@@ -145,22 +133,22 @@ fn noop_updater_is_byte_equivalent_with_inherited_and_default_namespaces() {
 }
 
 #[test]
-fn updater_remaps_derived_cwmp_namespaces_without_changing_values() {
+fn updater_remaps_derived_foo_namespaces_without_changing_values() {
   let xml = serialize_with_updater(&model(), |event| {
-    event.update_namespace("cwmp", CWMP_13);
+    event.update_namespace("foo", FOO_V2);
   });
-  assert!(xml.contains("xmlns:cwmp=\"urn:dslforum-org:cwmp-1-3\""));
-  assert!(!xml.contains("xmlns:cwmp=\"urn:dslforum-org:cwmp-1-0\""));
-  assert!(xml.contains(&format!("source=\"{CWMP_10}\"")));
-  assert!(xml.contains(&format!("kept-{CWMP_10}")));
-  assert!(xml.contains("<soap-env:Body>"), "{}", xml);
+  assert!(xml.contains("xmlns:foo=\"urn:example:foo:v2\""));
+  assert!(!xml.contains("xmlns:foo=\"urn:example:foo:v1\""));
+  assert!(xml.contains(&format!("source=\"{FOO_V1}\"")));
+  assert!(xml.contains(&format!("kept-{FOO_V1}")));
+  assert!(xml.contains("<foo:Baz>"), "{}", xml);
 
   let mut reader = yaserde::xml::XmlRsReader::from_reader(xml.as_bytes());
   loop {
     match yaserde::xml::XmlEventReader::next_event(&mut reader).unwrap() {
       yaserde::xml::XmlReadEvent::StartElement { name, .. } => {
-        if name.prefix_ref() == Some("cwmp") {
-          assert_eq!(name.namespace_ref(), Some(CWMP_13));
+        if name.prefix_ref() == Some("foo") {
+          assert_eq!(name.namespace_ref(), Some(FOO_V2));
         }
       }
       yaserde::xml::XmlReadEvent::EndDocument => break,
@@ -172,26 +160,26 @@ fn updater_remaps_derived_cwmp_namespaces_without_changing_values() {
 #[test]
 fn updater_remaps_actual_nested_old_binding() {
   let mut outer_namespace = XmlNamespace::empty();
-  outer_namespace.force_put("s", "urn:outer");
+  outer_namespace.force_put("f", "urn:example:outer");
   let mut nested_namespace = XmlNamespace::empty();
-  nested_namespace.force_put("s", CWMP_10);
+  nested_namespace.force_put("f", FOO_V1);
   let mut serializer = Serializer::new_for_inner(Cursor::new(Vec::new()));
   serializer.set_start_element_updater(|event| {
-    if event.namespace.0.get("s").map(String::as_str) == Some(CWMP_10) {
-      event.update_namespace("s", CWMP_13);
+    if event.namespace.0.get("f").map(String::as_str) == Some(FOO_V1) {
+      event.update_namespace("f", FOO_V2);
     }
   });
   serializer
-    .write_start_element("s:Envelope", Vec::new(), outer_namespace)
+    .write_start_element("f:Foo", Vec::new(), outer_namespace)
     .unwrap();
   serializer
-    .write_start_element("s:Body", Vec::new(), nested_namespace)
+    .write_start_element("f:Bar", Vec::new(), nested_namespace)
     .unwrap();
   serializer.write_end_element().unwrap();
   serializer.write_end_element().unwrap();
   assert_eq!(
     String::from_utf8(serializer.into_inner().into_inner()).unwrap(),
-    "<s:Envelope xmlns:s=\"urn:outer\"><s:Body xmlns:s=\"urn:dslforum-org:cwmp-1-3\" /></s:Envelope>"
+    "<f:Foo xmlns:f=\"urn:example:outer\"><f:Bar xmlns:f=\"urn:example:foo:v2\" /></f:Foo>"
   );
 }
 
@@ -202,18 +190,18 @@ fn raw_writer_maps_explicitly_qualified_name_and_attributes_once() {
   let mut serializer = Serializer::new_for_inner(Cursor::new(Vec::new()));
   serializer.set_start_element_updater(move |event| {
     callback_calls.fetch_add(1, Ordering::Relaxed);
-    event.update_namespace("p", CWMP_13);
+    event.update_namespace("p", FOO_V2);
   });
   let namespace = ::xml::namespace::Namespace(
-    vec![("p".to_owned(), CWMP_10.to_owned())]
+    vec![("p".to_owned(), FOO_V1.to_owned())]
       .into_iter()
       .collect(),
   );
   serializer
     .write(::xml::writer::events::XmlEvent::StartElement {
-      name: ::xml::name::Name::qualified("raw", CWMP_10, Some("p")),
+      name: ::xml::name::Name::qualified("raw", FOO_V1, Some("p")),
       attributes: Cow::Owned(vec![::xml::attribute::Attribute::new(
-        ::xml::name::Name::qualified("id", CWMP_10, Some("p")),
+        ::xml::name::Name::qualified("id", FOO_V1, Some("p")),
         "42",
       )]),
       namespace: Cow::Owned(namespace),
@@ -225,7 +213,7 @@ fn raw_writer_maps_explicitly_qualified_name_and_attributes_once() {
   assert_eq!(calls.load(Ordering::Relaxed), 1);
   assert_eq!(
     String::from_utf8(serializer.into_inner().into_inner()).unwrap(),
-    "<p:raw xmlns:p=\"urn:dslforum-org:cwmp-1-3\" p:id=\"42\" />"
+    "<p:raw xmlns:p=\"urn:example:foo:v2\" p:id=\"42\" />"
   );
 }
 
@@ -256,7 +244,7 @@ fn derived_serialization_calls_updater_once_per_start_element() {
   serialize_with_updater(&model(), move |_| {
     callback_calls.fetch_add(1, Ordering::Relaxed);
   });
-  assert_eq!(calls.load(Ordering::Relaxed), 12);
+  assert_eq!(calls.load(Ordering::Relaxed), 10);
 }
 
 #[test]
@@ -269,18 +257,18 @@ fn serializer_remains_send_and_sync() {
 #[test]
 fn namespace_helpers_keep_expanded_names_consistent() {
   let mut event = XmlStartElement::new(
-    XmlName::qualified("root", CWMP_10, Some("p")),
+    XmlName::qualified("root", FOO_V1, Some("p")),
     vec![
-      XmlAttribute::new(XmlName::qualified("id", CWMP_10, Some("p")), "1"),
+      XmlAttribute::new(XmlName::qualified("id", FOO_V1, Some("p")), "1"),
       XmlAttribute::new(XmlName::local("plain"), "2"),
     ],
     XmlNamespace::empty(),
   );
-  assert!(!event.update_namespace("p", CWMP_13));
-  assert_eq!(event.set_namespace("p", CWMP_13), None);
-  assert_eq!(event.name.namespace_ref(), Some(CWMP_13));
-  assert_eq!(event.attributes[0].name.namespace_ref(), Some(CWMP_13));
-  event.set_namespace("", "urn:default");
+  assert!(!event.update_namespace("p", FOO_V2));
+  assert_eq!(event.set_namespace("p", FOO_V2), None);
+  assert_eq!(event.name.namespace_ref(), Some(FOO_V2));
+  assert_eq!(event.attributes[0].name.namespace_ref(), Some(FOO_V2));
+  event.set_namespace("", "urn:example:default");
   assert_eq!(event.attributes[1].name.namespace_ref(), None);
   event.set_attribute("plain", "changed");
   event.set_attribute("added", "3");
@@ -290,14 +278,14 @@ fn namespace_helpers_keep_expanded_names_consistent() {
 
 #[test]
 fn serializers_keep_owned_callback_configuration_independent() {
-  let first_uri = String::from("urn:first");
+  let first_uri = String::from("urn:example:first");
   let first = serialize_with_updater(&model(), move |event| {
-    event.update_namespace("cwmp", first_uri.clone());
+    event.update_namespace("foo", first_uri.clone());
   });
-  let second_uri = String::from("urn:second");
+  let second_uri = String::from("urn:example:second");
   let second = serialize_with_updater(&model(), move |event| {
-    event.update_namespace("cwmp", second_uri.clone());
+    event.update_namespace("foo", second_uri.clone());
   });
-  assert!(first.contains("xmlns:cwmp=\"urn:first\""));
-  assert!(second.contains("xmlns:cwmp=\"urn:second\""));
+  assert!(first.contains("xmlns:foo=\"urn:example:first\""));
+  assert!(second.contains("xmlns:foo=\"urn:example:second\""));
 }

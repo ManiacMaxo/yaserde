@@ -8,63 +8,55 @@ use yaserde::YaSerialize;
 #[cfg(not(feature = "derive"))]
 use yaserde_derive::YaSerialize;
 
-const CWMP_10: &str = "urn:dslforum-org:cwmp-1-0";
-const CWMP_13: &str = "urn:dslforum-org:cwmp-1-3";
-const SOAP_ENV: &str = "http://schemas.xmlsoap.org/soap/envelope/";
-const SOAP_ENC: &str = "http://schemas.xmlsoap.org/soap/encoding/";
-const XSI: &str = "http://www.w3.org/2001/XMLSchema-instance";
-const XSD: &str = "http://www.w3.org/2001/XMLSchema";
+const FOO_V1: &str = "urn:example:foo:v1";
+const FOO_V2: &str = "urn:example:foo:v2";
+const BAR: &str = "urn:example:bar";
 
 #[derive(YaSerialize)]
-#[yaserde(prefix = "soapenv", namespaces = { "soapenv" = "http://schemas.xmlsoap.org/soap/envelope/", "soapenc" = "http://schemas.xmlsoap.org/soap/encoding/", "xsi" = "http://www.w3.org/2001/XMLSchema-instance", "xsd" = "http://www.w3.org/2001/XMLSchema", "cwmp" = "urn:dslforum-org:cwmp-1-0" })]
-struct Envelope {
-  #[yaserde(rename = "Header", prefix = "soapenv")]
-  header: Header,
-  #[yaserde(rename = "Body", prefix = "soapenv")]
-  body: Body,
+#[yaserde(prefix = "foo", namespaces = { "foo" = "urn:example:foo:v1", "bar" = "urn:example:bar" })]
+struct Foo {
+  #[yaserde(rename = "Bar", prefix = "foo")]
+  bar: Bar,
 }
 
 #[derive(YaSerialize)]
-#[yaserde(namespaces = { "cwmp" = "urn:dslforum-org:cwmp-1-0" })]
-struct Header {
-  #[yaserde(rename = "ID", prefix = "cwmp")]
-  id: String,
+#[yaserde(namespaces = { "foo" = "urn:example:foo:v1", "bar" = "urn:example:bar" })]
+struct Bar {
+  #[yaserde(attribute = true, prefix = "bar", rename = "version")]
+  version: String,
+  #[yaserde(rename = "Baz", prefix = "foo")]
+  baz: Baz,
 }
 
 #[derive(YaSerialize)]
-#[yaserde(prefix = "soapenv", namespaces = { "soapenv" = "http://schemas.xmlsoap.org/soap/envelope/" })]
-struct Body {
-  #[yaserde(rename = "GetParameterValuesResponse", prefix = "cwmp")]
-  response: GetParameterValuesResponse,
+#[yaserde(prefix = "foo", namespaces = { "foo" = "urn:example:foo:v1", "bar" = "urn:example:bar" })]
+struct Baz {
+  #[yaserde(rename = "Items")]
+  items: Items,
 }
 
 #[derive(YaSerialize)]
-#[yaserde(prefix = "cwmp", namespaces = { "cwmp" = "urn:dslforum-org:cwmp-1-0", "soapenv" = "http://schemas.xmlsoap.org/soap/envelope/", "soapenc" = "http://schemas.xmlsoap.org/soap/encoding/", "xsi" = "http://www.w3.org/2001/XMLSchema-instance", "xsd" = "http://www.w3.org/2001/XMLSchema" })]
-struct GetParameterValuesResponse {
-  #[yaserde(rename = "ParameterList")]
-  parameters: ParameterValueList,
+struct Items {
+  #[yaserde(attribute = true, prefix = "bar", rename = "count")]
+  count: Option<String>,
+  #[yaserde(rename = "Item")]
+  entries: Vec<Item>,
 }
 
 #[derive(YaSerialize)]
-struct ParameterValueList {
-  #[yaserde(attribute = true, prefix = "soapenc", rename = "arrayType")]
-  array_type: Option<String>,
-  #[yaserde(rename = "ParameterValueStruct")]
-  entries: Vec<ParameterValue>,
-}
-
-#[derive(YaSerialize)]
-struct ParameterValue {
-  #[yaserde(rename = "Name")]
-  name: String,
+struct Item {
+  #[yaserde(attribute = true, prefix = "bar", rename = "kind")]
+  kind: Option<String>,
+  #[yaserde(rename = "Label")]
+  label: String,
   #[yaserde(rename = "Value")]
   value: Option<Value>,
 }
 
 #[derive(YaSerialize)]
 struct Value {
-  #[yaserde(attribute = true, prefix = "xsi", rename = "type")]
-  xsi_type: Option<String>,
+  #[yaserde(attribute = true, prefix = "bar", rename = "format")]
+  format: Option<String>,
   #[yaserde(text = true)]
   content: Option<String>,
 }
@@ -83,7 +75,7 @@ impl Case {
     match self {
       Self::NoHook => "no hook",
       Self::Noop => "no-op hook",
-      Self::Update => "cwmp 1-0 -> 1-3",
+      Self::Update => "foo v1 -> v2",
     }
   }
 
@@ -96,21 +88,20 @@ impl Case {
   }
 }
 
-fn payload(size: usize) -> Envelope {
-  Envelope {
-    header: Header {
-      id: "codex-request-42".to_owned(),
-    },
-    body: Body {
-      response: GetParameterValuesResponse {
-        parameters: ParameterValueList {
-          array_type: Some(format!("cwmp:ParameterValueStruct[{size}]")),
+fn payload(size: usize) -> Foo {
+  Foo {
+    bar: Bar {
+      version: FOO_V1.to_owned(),
+      baz: Baz {
+        items: Items {
+          count: Some(size.to_string()),
           entries: (0..size)
-            .map(|index| ParameterValue {
-              name: format!("Device.WiFi.SSID.{index}.SSID"),
+            .map(|index| Item {
+              kind: Some("example".to_owned()),
+              label: format!("item-{index}"),
               value: Some(Value {
-                xsi_type: Some("xsd:string".to_owned()),
-                content: Some(format!("codex-value-{index}")),
+                format: Some("text".to_owned()),
+                content: Some(format!("value-{index}")),
               }),
             })
             .collect(),
@@ -120,25 +111,25 @@ fn payload(size: usize) -> Envelope {
   }
 }
 
-fn serialize(payload: &Envelope, case: Case) -> String {
+fn serialize(payload: &Foo, case: Case) -> String {
   let mut serializer = Serializer::new_for_inner(Cursor::new(Vec::new()));
   match case {
     Case::NoHook => {}
     Case::Noop => serializer.set_start_element_updater(|_| {}),
     Case::Update => serializer.set_start_element_updater(|event| {
-      event.update_namespace("cwmp", CWMP_13);
+      event.update_namespace("foo", FOO_V2);
     }),
   }
   payload.serialize(&mut serializer).unwrap();
   String::from_utf8(serializer.into_inner().into_inner()).unwrap()
 }
 
-fn assert_cwmp_namespace(xml: &str) {
+fn assert_foo_namespace(xml: &str) {
   let mut reader = XmlRsReader::from_reader(xml.as_bytes());
   loop {
     match reader.next_event().unwrap() {
-      XmlReadEvent::StartElement { name, .. } if name.prefix_ref() == Some("cwmp") => {
-        assert_eq!(name.namespace_ref(), Some(CWMP_13));
+      XmlReadEvent::StartElement { name, .. } if name.prefix_ref() == Some("foo") => {
+        assert_eq!(name.namespace_ref(), Some(FOO_V2));
       }
       XmlReadEvent::EndDocument => break,
       _ => {}
@@ -180,20 +171,16 @@ fn main() {
     "no-op hook changed bytes"
   );
   let updated = serialize(&payload, Case::Update);
-  assert!(updated.contains(CWMP_13));
-  assert!(!updated.contains(CWMP_10));
-  assert_cwmp_namespace(&updated);
-  assert!(updated.contains(SOAP_ENV));
-  assert!(updated.contains(SOAP_ENC));
-  assert!(updated.contains(XSI));
-  assert!(updated.contains(XSD));
-  assert!(updated.contains(&format!(
-    "soapenc:arrayType=\"cwmp:ParameterValueStruct[{size}]\""
-  )));
-  assert!(updated.contains("xsi:type=\"xsd:string\""));
-  assert!(updated.contains("codex-request-42"));
-  assert!(updated.contains("Device.WiFi.SSID.0.SSID"));
-  assert!(updated.contains(&format!("codex-value-{}", size.saturating_sub(1))));
+  assert!(updated.contains("xmlns:foo=\"urn:example:foo:v2\""));
+  assert!(!updated.contains("xmlns:foo=\"urn:example:foo:v1\""));
+  assert!(updated.contains(&format!("bar:version=\"{FOO_V1}\"")));
+  assert_foo_namespace(&updated);
+  assert!(updated.contains(BAR));
+  assert!(updated.contains(&format!("bar:count=\"{size}\"")));
+  assert!(updated.contains("bar:kind=\"example\""));
+  assert!(updated.contains("bar:format=\"text\""));
+  assert!(updated.contains("item-0"));
+  assert!(updated.contains(&format!("value-{}", size.saturating_sub(1))));
 
   const WARMUPS: usize = 3;
   const SAMPLES: usize = 7;
