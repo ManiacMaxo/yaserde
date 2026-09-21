@@ -50,7 +50,10 @@ impl YaDeserialize for MyType {
 ```rust
 
 impl YaSerialize for MyType {
-  fn serialize<W: Write>(&self, writer: &mut yaserde::ser::Serializer<W>) -> Result<(), String> {
+  fn serialize<E: yaserde::xml::XmlEventWriter>(
+    &self,
+    writer: &mut yaserde::ser::Serializer<E>,
+  ) -> Result<(), String> {
     // serializer code
   }
 }
@@ -71,9 +74,9 @@ Enable the faster quick-xml backend with:
 yaserde = { version = "...", features = ["quick-xml-backend"] }
 ```
 
-When `quick-xml-backend` is enabled, `yaserde::de::from_str` and `from_reader` use quick-xml by default. Generated deserializers automatically use parser-neutral light-event and simple-text fast paths when available, avoiding full XML event materialization for common leaf fields while keeping the backend swappable.
+When `quick-xml-backend` is enabled, `yaserde::de::from_str` and `from_reader` use quick-xml by default, and serialization helpers use `QuickXmlWriter` by default. Generated deserializers automatically use parser-neutral light-event and simple-text fast paths when available, avoiding full XML event materialization for common leaf fields while keeping the backend swappable.
 
-For runtime selection, pass a `Box<dyn yaserde::xml::XmlEventReader>` to `yaserde::de::from_reader_dyn`.
+For runtime selection, pass a `Box<dyn yaserde::xml::XmlEventReader>` to `yaserde::de::from_reader_dyn`, or pass any `XmlEventWriter` (including a boxed or borrowed one) to `yaserde::ser::serialize_with_emitter`.
 
 Migration note: custom deserializers should use `yaserde::xml::XmlReadEvent` instead of matching `xml::reader::XmlEvent` directly.
 

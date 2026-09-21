@@ -21,9 +21,9 @@ pub fn implement_serializer(
   quote! {
     impl #impl_generics ::yaserde::YaSerialize for #name #ty_generics #where_clause {
       #[allow(unused_variables)]
-      fn serialize<W: ::std::io::Write>(
+      fn serialize<E: ::yaserde::xml::XmlEventWriter>(
         &self,
-        writer: &mut ::yaserde::ser::Serializer<W>,
+        writer: &mut ::yaserde::ser::Serializer<E>,
       ) -> ::std::result::Result<(), ::std::string::String> {
         let skip = writer.skip_start_end();
 

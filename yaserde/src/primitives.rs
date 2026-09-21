@@ -1,11 +1,9 @@
-use std::io::Write;
-
 use crate::{de, ser};
 
-pub fn serialize_primitives<S, W: Write>(
+pub fn serialize_primitives<S, E: crate::xml::XmlEventWriter>(
   self_bypass: &S,
   default_name: &str,
-  writer: &mut ser::Serializer<W>,
+  writer: &mut ser::Serializer<E>,
   serialize_function: impl FnOnce(&S) -> String,
 ) -> Result<(), String> {
   let name = writer

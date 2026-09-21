@@ -296,6 +296,12 @@ impl<T: XmlEventWriter + ?Sized> XmlEventWriter for Box<T> {
   }
 }
 
+impl<T: XmlEventWriter + ?Sized> XmlEventWriter for &mut T {
+  fn write_event(&mut self, event: XmlWriteEvent<'_>) -> Result<(), String> {
+    (**self).write_event(event)
+  }
+}
+
 /// `xml-rs` reader adapter. This preserves the parser configuration YaSerDe used
 /// before introducing parser abstraction.
 pub struct XmlRsReader<R: Read> {
@@ -362,8 +368,29 @@ impl<W: std::io::Write> XmlRsWriter<W> {
     Self { inner }
   }
 
+  pub fn from_writer(writer: W, config: &crate::ser::Config) -> Self {
+    let mut emitter_config = ::xml::EmitterConfig::new()
+      .cdata_to_characters(false)
+      .perform_indent(config.perform_indent)
+      .write_document_declaration(config.write_document_declaration);
+    if let Some(indent) = &config.indent_string {
+      emitter_config = emitter_config.indent_string(indent.clone());
+    }
+    Self::new(::xml::writer::EventWriter::new_with_config(
+      writer,
+      emitter_config,
+    ))
+  }
+
   pub fn into_inner(self) -> W {
     self.inner.into_inner()
+  }
+
+  pub(crate) fn write<'a, E>(&mut self, event: E) -> ::xml::writer::Result<()>
+  where
+    E: Into<::xml::writer::XmlEvent<'a>>,
+  {
+    self.inner.write(event)
   }
 }
 
@@ -401,6 +428,162 @@ impl<W: std::io::Write> XmlEventWriter for XmlRsWriter<W> {
         .write(::xml::writer::events::XmlEvent::cdata(&text))
         .map_err(|e| e.to_string()),
     }
+  }
+}
+
+#[cfg(feature = "quick-xml-backend")]
+pub struct QuickXmlWriter<W: std::io::Write> {
+  inner: quick_xml::Writer<W>,
+  config: crate::ser::Config,
+  elements: Vec<(
+    String,
+    XmlNamespace,
+    Option<quick_xml::events::BytesStart<'static>>,
+  )>,
+  declaration_pending: bool,
+  last_was_text: bool,
+}
+
+#[cfg(feature = "quick-xml-backend")]
+impl<W: std::io::Write> QuickXmlWriter<W> {
+  pub fn new(inner: W) -> Self {
+    Self::from_writer(inner, &crate::ser::Config::default())
+  }
+
+  pub fn from_writer(inner: W, config: &crate::ser::Config) -> Self {
+    let mut inner = quick_xml::Writer::new(inner);
+    inner.config_mut().add_space_before_slash_in_empty_elements = true;
+    Self {
+      inner,
+      config: crate::ser::Config {
+        perform_indent: config.perform_indent,
+        write_document_declaration: config.write_document_declaration,
+        indent_string: config.indent_string.clone(),
+      },
+      elements: Vec::new(),
+      declaration_pending: config.write_document_declaration,
+      last_was_text: false,
+    }
+  }
+
+  pub fn into_inner(self) -> W {
+    self.inner.into_inner()
+  }
+
+  fn write(&mut self, event: quick_xml::events::Event<'_>) -> Result<(), String> {
+    self
+      .inner
+      .write_event(event)
+      .map_err(|error| error.to_string())
+  }
+
+  fn indent(&mut self, depth: usize) -> Result<(), String> {
+    if self.config.perform_indent && !self.last_was_text {
+      let indent = self.config.indent_string.as_deref().unwrap_or("  ");
+      let whitespace = format!("\n{}", indent.repeat(depth));
+      self.write(quick_xml::events::Event::Text(
+        quick_xml::events::BytesText::from_escaped(whitespace),
+      ))?;
+    }
+    Ok(())
+  }
+
+  fn declaration(&mut self) -> Result<(), String> {
+    if self.declaration_pending {
+      self.write(quick_xml::events::Event::Decl(
+        quick_xml::events::BytesDecl::new("1.0", Some("UTF-8"), None),
+      ))?;
+      self.declaration_pending = false;
+    }
+    Ok(())
+  }
+
+  fn flush_start_element(&mut self) -> Result<(), String> {
+    if let Some(start) = self
+      .elements
+      .last_mut()
+      .and_then(|(_, _, start)| start.take())
+    {
+      self.write(quick_xml::events::Event::Start(start))?;
+    }
+    Ok(())
+  }
+}
+
+#[cfg(feature = "quick-xml-backend")]
+impl<W: std::io::Write> XmlEventWriter for QuickXmlWriter<W> {
+  fn write_event(&mut self, event: XmlWriteEvent<'_>) -> Result<(), String> {
+    self.declaration()?;
+    match event {
+      XmlWriteEvent::StartElement {
+        name,
+        attributes,
+        namespace,
+      } => {
+        self.flush_start_element()?;
+        let depth = self.elements.len();
+        self.indent(depth)?;
+        let inherited = self
+          .elements
+          .last()
+          .map(|(_, namespace, _)| namespace.clone())
+          .unwrap_or_default();
+        let mut in_scope = inherited.clone();
+        in_scope.extend(&namespace);
+        let name = name.into_owned();
+        let mut start = quick_xml::events::BytesStart::new(&name).into_owned();
+        for (prefix, uri) in &namespace.0 {
+          if inherited.0.get(prefix) != Some(uri) {
+            let declaration = if prefix.is_empty() {
+              "xmlns".into()
+            } else {
+              format!("xmlns:{prefix}")
+            };
+            start.push_attribute((declaration.as_str(), uri.as_str()));
+          }
+        }
+        for attribute in attributes {
+          let name = attribute.name.to_string();
+          start.push_attribute((name.as_str(), attribute.value.as_str()));
+        }
+        self.elements.push((name, in_scope, Some(start)));
+        self.last_was_text = false;
+      }
+      XmlWriteEvent::EndElement => {
+        let (name, _, start) = self
+          .elements
+          .pop()
+          .ok_or_else(|| "unexpected end element".to_string())?;
+        if let Some(start) = start {
+          self.write(quick_xml::events::Event::Empty(start))?;
+        } else {
+          self.indent(self.elements.len())?;
+          self.write(quick_xml::events::Event::End(
+            quick_xml::events::BytesEnd::new(name),
+          ))?;
+        }
+        self.last_was_text = false;
+      }
+      XmlWriteEvent::Characters(text) => {
+        self.flush_start_element()?;
+        let text = quick_xml::escape::partial_escape(text);
+        self.write(quick_xml::events::Event::Text(
+          quick_xml::events::BytesText::from_escaped(text),
+        ))?;
+        self.last_was_text = true;
+      }
+      XmlWriteEvent::CData(text) => {
+        if text.contains("]]>") {
+          return Err("CDATA content contains ]]>".to_string());
+        }
+        self.flush_start_element()?;
+        self.write(quick_xml::events::Event::CData(
+          quick_xml::events::BytesCData::new(text.as_ref()),
+        ))?;
+        self.last_was_text = true;
+      }
+    }
+    Ok(())
   }
 }
 

@@ -200,15 +200,18 @@ pub trait XmlEventWriter {
 }
 ```
 
-A single method.  Receive a `XmlWriteEvent` and emit the corresponding XML.  The
+A single method. Receive a `XmlWriteEvent` and emit the corresponding XML. The
 implementation must handle all four variants (`StartElement`, `EndElement`, `Characters`,
-`CData`).  Return `Err(String)` on I/O errors or well-formedness violations.
+`CData`) and return `Err(String)` on I/O errors or well-formedness violations.
 
-> **Note:** Serialization is currently less pluggable than deserialization.  The
-> `Serializer<W>` struct in `yaserde::ser` wraps an `xml::writer::EventWriter` directly.
-> The `XmlEventWriter` trait exists as the future abstraction boundary.  For now,
-> implementing `XmlEventWriter` prepares your backend for when serialization is fully
-> decoupled.
+`Serializer<E>` is generic over `E: XmlEventWriter`, so custom serializers work with every
+backend. Use `serialize_with_emitter` when selecting an emitter explicitly; it returns the
+emitter on success. `Box<dyn XmlEventWriter>` and `&mut E` forward automatically.
+
+```rust
+let emitter = MyWriter::new();
+let emitter = yaserde::ser::serialize_with_emitter(&value, emitter)?;
+```
 
 ---
 
@@ -244,10 +247,11 @@ YaSerDe selects the default reader based on Cargo features:
 | Feature flag | `from_reader` uses |
 |---|---|
 | *(none)* | `XmlRsReader` (xml-rs) |
-| `quick-xml-backend` | `QuickXmlReader` (quick-xml) |
+| `quick-xml-backend` | `QuickXmlReader` and `QuickXmlWriter` (quick-xml) |
 
-Your custom backend is always available explicitly via `from_reader_with_parser` or
-`from_reader_dyn` regardless of which default is active.
+Your custom reader is always available explicitly via `from_reader_with_parser` or
+`from_reader_dyn`; custom writers are selected with `serialize_with_emitter` regardless of
+which default is active.
 
 ---
 

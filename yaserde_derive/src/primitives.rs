@@ -14,9 +14,9 @@ pub fn primitive_yaserde(input: TokenStream) -> TokenStream {
 
   let serde = quote! {
       impl ::yaserde::YaSerialize for #struct_name {
-          fn serialize<W: ::std::io::Write>(
+          fn serialize<E: ::yaserde::xml::XmlEventWriter>(
               &self,
-              writer: &mut ::yaserde::ser::Serializer<W>,
+              writer: &mut ::yaserde::ser::Serializer<E>,
           ) -> ::std::result::Result<(), ::std::string::String> {
             ::yaserde::primitives::serialize_primitives(
                   self,
