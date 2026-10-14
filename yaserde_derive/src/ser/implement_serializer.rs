@@ -2,8 +2,8 @@ use crate::common::YaSerdeAttribute;
 use crate::ser::namespace::generate_namespaces_definition;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
-use quote::quote;
-use syn::Generics;
+use quote::{format_ident, quote};
+use syn::{ext::IdentExt, GenericParam, Generics};
 
 pub fn implement_serializer(
   name: &Ident,
@@ -17,13 +17,24 @@ pub fn implement_serializer(
   let flatten = attributes.flatten;
 
   let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+  // Method generics share a namespace with the model's type/const parameters.
+  let mut writer_type = format_ident!("__YaSerdeWriter");
+  while name.unraw() == writer_type
+    || generics.params.iter().any(|param| match param {
+      GenericParam::Type(param) => param.ident.unraw() == writer_type,
+      GenericParam::Const(param) => param.ident.unraw() == writer_type,
+      GenericParam::Lifetime(_) => false,
+    })
+  {
+    writer_type = format_ident!("{}_", writer_type);
+  }
 
   quote! {
     impl #impl_generics ::yaserde::YaSerialize for #name #ty_generics #where_clause {
       #[allow(unused_variables)]
-      fn serialize<E: ::yaserde::xml::XmlEventWriter>(
+      fn serialize<#writer_type: ::yaserde::xml::XmlEventWriter>(
         &self,
-        writer: &mut ::yaserde::ser::Serializer<E>,
+        writer: &mut ::yaserde::ser::Serializer<#writer_type>,
       ) -> ::std::result::Result<(), ::std::string::String> {
         let skip = writer.skip_start_end();
 

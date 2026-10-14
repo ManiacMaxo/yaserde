@@ -144,9 +144,6 @@ fn quick_xml_writer_round_trips_with_both_readers_and_honors_indent() {
 
   let mut errors = QuickXmlWriter::from_writer(Vec::new(), &Config::default());
   assert!(errors.write_event(XmlWriteEvent::EndElement).is_err());
-  assert!(errors
-    .write_event(XmlWriteEvent::CData("]]>".into()))
-    .is_err());
   let xml_rs: Root = from_reader_with_parser(XmlRsReader::from_reader(xml.as_bytes())).unwrap();
   let quick: Root = from_reader_with_parser(yaserde::xml::QuickXmlReader::from_reader(
     std::io::Cursor::new(&xml),
@@ -154,6 +151,130 @@ fn quick_xml_writer_round_trips_with_both_readers_and_honors_indent() {
   .unwrap();
   assert_eq!(xml_rs, model);
   assert_eq!(quick, model);
+}
+
+#[cfg(feature = "quick-xml-backend")]
+#[test]
+fn quick_xml_attributes_preserve_whitespace_and_escaping() {
+  #[derive(YaSerialize)]
+  struct Attributed {
+    #[yaserde(attribute = true)]
+    value: String,
+  }
+
+  for value in ["plain", "a\tb\nc\rd", "<&\"'>&amp;", "é\n水"] {
+    let model = Attributed {
+      value: value.into(),
+    };
+    let bytes = serialize_with_emitter(&model, yaserde::xml::QuickXmlWriter::new(Vec::new()))
+      .unwrap()
+      .into_inner();
+    let xml = String::from_utf8(bytes).unwrap();
+    // An independent parser applies XML attribute-value normalization.
+    let parsed = roxmltree::Document::parse(&xml).unwrap();
+    assert_eq!(parsed.root_element().attribute("value"), Some(value));
+  }
+}
+
+#[cfg(feature = "quick-xml-backend")]
+#[test]
+fn quick_xml_cdata_preserves_closing_delimiters() {
+  for value in ["", "raw <& text", "a]]>b", "]]>]]>", "é]]>水"] {
+    let mut writer = yaserde::xml::QuickXmlWriter::new(Vec::new());
+    writer
+      .write_event(XmlWriteEvent::StartElement {
+        name: "root".into(),
+        attributes: Vec::new(),
+        namespace: XmlNamespace::empty(),
+      })
+      .unwrap();
+    writer
+      .write_event(XmlWriteEvent::CData(value.into()))
+      .unwrap();
+    writer.write_event(XmlWriteEvent::EndElement).unwrap();
+    let xml = String::from_utf8(writer.into_inner()).unwrap();
+    let parsed = roxmltree::Document::parse(&xml).unwrap();
+    let text: String = parsed
+      .root_element()
+      .children()
+      .filter_map(|node| node.text())
+      .collect();
+    assert_eq!(text, value);
+  }
+}
+
+#[cfg(feature = "quick-xml-backend")]
+#[test]
+fn quick_xml_restores_namespace_bindings_after_each_element() {
+  fn start(writer: &mut impl XmlEventWriter, name: &str, bindings: &[(&str, &str)]) {
+    let mut namespace = XmlNamespace::empty();
+    for &(prefix, uri) in bindings {
+      namespace.put(prefix, uri);
+    }
+    writer
+      .write_event(XmlWriteEvent::StartElement {
+        name: name.into(),
+        attributes: Vec::new(),
+        namespace,
+      })
+      .unwrap();
+  }
+
+  let mut writer = yaserde::xml::QuickXmlWriter::new(Vec::new());
+  start(
+    &mut writer,
+    "root",
+    &[("", "urn:default"), ("p", "urn:outer")],
+  );
+  // Exercise both deferred (empty) and flushed start tags.
+  for has_child in [false, true] {
+    start(
+      &mut writer,
+      "p:inner",
+      &[("", ""), ("p", "urn:inner"), ("q", "urn:local")],
+    );
+    if has_child {
+      start(&mut writer, "child", &[]);
+      writer.write_event(XmlWriteEvent::EndElement).unwrap();
+    }
+    writer.write_event(XmlWriteEvent::EndElement).unwrap();
+    start(&mut writer, "p:sibling", &[("p", "urn:outer")]);
+    writer.write_event(XmlWriteEvent::EndElement).unwrap();
+    start(&mut writer, "sibling", &[]);
+    writer.write_event(XmlWriteEvent::EndElement).unwrap();
+    // q must be declared again after the previous local binding left scope.
+    start(&mut writer, "q:sibling", &[("q", "urn:local")]);
+    writer.write_event(XmlWriteEvent::EndElement).unwrap();
+  }
+  writer.write_event(XmlWriteEvent::EndElement).unwrap();
+
+  let xml = String::from_utf8(writer.into_inner()).unwrap();
+  let parsed = roxmltree::Document::parse(&xml).unwrap();
+  let names: Vec<_> = parsed
+    .descendants()
+    .filter(|node| node.is_element())
+    .map(|node| {
+      (
+        node.tag_name().name(),
+        node.tag_name().namespace().filter(|uri| !uri.is_empty()),
+      )
+    })
+    .collect();
+  assert_eq!(
+    names,
+    vec![
+      ("root", Some("urn:default")),
+      ("inner", Some("urn:inner")),
+      ("sibling", Some("urn:outer")),
+      ("sibling", Some("urn:default")),
+      ("sibling", Some("urn:local")),
+      ("inner", Some("urn:inner")),
+      ("child", None),
+      ("sibling", Some("urn:outer")),
+      ("sibling", Some("urn:default")),
+      ("sibling", Some("urn:local")),
+    ]
+  );
 }
 
 #[derive(Debug, PartialEq, YaDeserialize)]

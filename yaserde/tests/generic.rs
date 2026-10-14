@@ -3,6 +3,24 @@ extern crate yaserde;
 
 use yaserde::{YaDeserialize, YaSerialize};
 
+#[test]
+fn serializer_writer_parameter_does_not_shadow_model_parameters() {
+  #[derive(YaSerialize)]
+  struct Generic<E: YaSerialize, __YaSerdeWriter: YaSerialize, __YaSerdeWriter_: YaSerialize> {
+    first: E,
+    second: __YaSerdeWriter,
+    third: __YaSerdeWriter_,
+  }
+
+  let model = Generic {
+    first: 1u32,
+    second: 2u32,
+    third: 3u32,
+  };
+  let content = "<Generic>123</Generic>";
+  serialize_and_validate!(model, content);
+}
+
 fn init() {
   let _ = env_logger::builder().is_test(true).try_init();
 }
@@ -13,11 +31,11 @@ fn generic() {
 
   #[derive(Debug, PartialEq, YaDeserialize, YaSerialize)]
   #[yaserde(rename = "base")]
-  pub struct Base<G>
+  pub struct Base<E>
   where
-    G: YaSerialize + YaDeserialize + Default,
+    E: YaSerialize + YaDeserialize + Default,
   {
-    background: G,
+    background: E,
   }
 
   #[derive(Debug, Default, PartialEq, YaDeserialize, YaSerialize)]

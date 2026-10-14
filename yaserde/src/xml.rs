@@ -432,14 +432,46 @@ impl<W: std::io::Write> XmlEventWriter for XmlRsWriter<W> {
 }
 
 #[cfg(feature = "quick-xml-backend")]
+struct WriterFrame {
+  name: String,
+  // Only changed bindings need restoring; most leaf elements allocate nothing here.
+  namespace_changes: Vec<(String, Option<String>)>,
+  start: Option<quick_xml::events::BytesStart<'static>>,
+}
+
+#[cfg(feature = "quick-xml-backend")]
+fn escape_attribute(value: &str) -> Cow<'_, str> {
+  let Some(first) = value.find(['&', '<', '>', '"', '\'', '\t', '\n', '\r']) else {
+    return Cow::Borrowed(value);
+  };
+  let mut escaped = String::with_capacity(value.len());
+  escaped.push_str(&value[..first]);
+  for character in value[first..].chars() {
+    escaped.push_str(match character {
+      '&' => "&amp;",
+      '<' => "&lt;",
+      '>' => "&gt;",
+      '"' => "&quot;",
+      '\'' => "&apos;",
+      // Literal whitespace in attributes is normalized by conforming XML readers.
+      '\t' => "&#x9;",
+      '\n' => "&#xA;",
+      '\r' => "&#xD;",
+      _ => {
+        escaped.push(character);
+        continue;
+      }
+    });
+  }
+  Cow::Owned(escaped)
+}
+
+#[cfg(feature = "quick-xml-backend")]
 pub struct QuickXmlWriter<W: std::io::Write> {
   inner: quick_xml::Writer<W>,
   config: crate::ser::Config,
-  elements: Vec<(
-    String,
-    XmlNamespace,
-    Option<quick_xml::events::BytesStart<'static>>,
-  )>,
+  elements: Vec<WriterFrame>,
+  in_scope: XmlNamespace,
   declaration_pending: bool,
   last_was_text: bool,
 }
@@ -461,6 +493,7 @@ impl<W: std::io::Write> QuickXmlWriter<W> {
         indent_string: config.indent_string.clone(),
       },
       elements: Vec::new(),
+      in_scope: XmlNamespace::empty(),
       declaration_pending: config.write_document_declaration,
       last_was_text: false,
     }
@@ -502,7 +535,7 @@ impl<W: std::io::Write> QuickXmlWriter<W> {
     if let Some(start) = self
       .elements
       .last_mut()
-      .and_then(|(_, _, start)| start.take())
+      .and_then(|frame| frame.start.take())
     {
       self.write(quick_xml::events::Event::Start(start))?;
     }
@@ -523,44 +556,54 @@ impl<W: std::io::Write> XmlEventWriter for QuickXmlWriter<W> {
         self.flush_start_element()?;
         let depth = self.elements.len();
         self.indent(depth)?;
-        let inherited = self
-          .elements
-          .last()
-          .map(|(_, namespace, _)| namespace.clone())
-          .unwrap_or_default();
-        let mut in_scope = inherited.clone();
-        in_scope.extend(&namespace);
+        let mut namespace_changes = Vec::new();
         let name = name.into_owned();
         let mut start = quick_xml::events::BytesStart::new(&name).into_owned();
-        for (prefix, uri) in &namespace.0 {
-          if inherited.0.get(prefix) != Some(uri) {
+        for (prefix, uri) in namespace.0 {
+          if self.in_scope.0.get(&prefix) != Some(&uri) {
             let declaration = if prefix.is_empty() {
               "xmlns".into()
             } else {
               format!("xmlns:{prefix}")
             };
-            start.push_attribute((declaration.as_str(), uri.as_str()));
+            let escaped = escape_attribute(&uri);
+            // Byte attributes are already escaped; the string overload escapes again.
+            start.push_attribute((declaration.as_bytes(), escaped.as_bytes()));
+            let previous = self.in_scope.0.insert(prefix.clone(), uri);
+            namespace_changes.push((prefix, previous));
           }
         }
         for attribute in attributes {
           let name = attribute.name.to_string();
-          start.push_attribute((name.as_str(), attribute.value.as_str()));
+          let escaped = escape_attribute(&attribute.value);
+          start.push_attribute((name.as_bytes(), escaped.as_bytes()));
         }
-        self.elements.push((name, in_scope, Some(start)));
+        self.elements.push(WriterFrame {
+          name,
+          namespace_changes,
+          start: Some(start),
+        });
         self.last_was_text = false;
       }
       XmlWriteEvent::EndElement => {
-        let (name, _, start) = self
+        let frame = self
           .elements
           .pop()
           .ok_or_else(|| "unexpected end element".to_string())?;
-        if let Some(start) = start {
+        if let Some(start) = frame.start {
           self.write(quick_xml::events::Event::Empty(start))?;
         } else {
           self.indent(self.elements.len())?;
           self.write(quick_xml::events::Event::End(
-            quick_xml::events::BytesEnd::new(name),
+            quick_xml::events::BytesEnd::new(frame.name),
           ))?;
+        }
+        for (prefix, previous) in frame.namespace_changes {
+          if let Some(uri) = previous {
+            self.in_scope.0.insert(prefix, uri);
+          } else {
+            self.in_scope.0.remove(&prefix);
+          }
         }
         self.last_was_text = false;
       }
@@ -573,13 +616,10 @@ impl<W: std::io::Write> XmlEventWriter for QuickXmlWriter<W> {
         self.last_was_text = true;
       }
       XmlWriteEvent::CData(text) => {
-        if text.contains("]]>") {
-          return Err("CDATA content contains ]]>".to_string());
-        }
         self.flush_start_element()?;
-        self.write(quick_xml::events::Event::CData(
-          quick_xml::events::BytesCData::new(text.as_ref()),
-        ))?;
+        for section in quick_xml::events::BytesCData::escaped(text.as_ref()) {
+          self.write(quick_xml::events::Event::CData(section))?;
+        }
         self.last_was_text = true;
       }
     }
